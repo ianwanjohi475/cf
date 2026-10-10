@@ -67,6 +67,7 @@ Use Meet's **Present** or **Share screen** button to show your content instead.
 | `./phone.sh install app.apk` | Install an APK |
 | `./phone.sh upload photo.jpg` | Send a photo/video/file to the phone |
 | `./phone.sh home` / `back` / `rotate` | Press buttons |
+| `./phone.sh crashlog` | Show why an app crashed |
 | `./phone.sh shell` | Open an adb shell |
 | `./phone.sh reset` | **Erase everything** and start fresh |
 

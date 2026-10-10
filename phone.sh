@@ -51,6 +51,10 @@ case "$1" in
         curl -fsS ${VNC_PASSWORD:+-u "phone:${VNC_PASSWORD}"} -F "file=@$2" "http://localhost:${PORT}/upload"
         echo
         ;;
+    crashlog)
+        # Recent app crashes (Java and native), newest last.
+        adb_in logcat -d -b crash -v time | tail -n "${2:-80}"
+        ;;
     home)  adb_in shell input keyevent KEYCODE_HOME ;;
     back)  adb_in shell input keyevent KEYCODE_BACK ;;
     rotate)
@@ -68,7 +72,7 @@ case "$1" in
         echo "Phone erased. Run ./phone.sh start to create a fresh one."
         ;;
     *)
-        echo "Usage: ./phone.sh {start|stop|restart|status|logs|install <apk>|upload <file>|home|back|rotate|shell|reset}"
+        echo "Usage: ./phone.sh {start|stop|restart|status|logs|install <apk>|upload <file>|crashlog|home|back|rotate|shell|reset}"
         exit 1
         ;;
 esac
