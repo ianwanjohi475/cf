@@ -1,0 +1,27 @@
+services:
+  phone:
+    build: ./docker
+    image: cloudphone:latest
+    container_name: cloudphone
+    restart: unless-stopped
+    devices:
+      - /dev/kvm:/dev/kvm
+    shm_size: 2gb
+    ports:
+      - "${LISTEN_ADDR:-127.0.0.1}:${WEB_PORT:-6080}:6080"
+    environment:
+      VNC_PASSWORD: ${VNC_PASSWORD:-}
+      PHONE_RAM_MB: ${PHONE_RAM_MB:-4096}
+      PHONE_CORES: ${PHONE_CORES:-4}
+      PHONE_STORAGE: ${PHONE_STORAGE:-16G}
+      PHONE_WIDTH: ${PHONE_WIDTH:-720}
+      PHONE_HEIGHT: ${PHONE_HEIGHT:-1600}
+      PHONE_DENSITY: ${PHONE_DENSITY:-320}
+      GPU_MODE: ${GPU_MODE:-swiftshader_indirect}
+      SCREEN_WIDTH: ${SCREEN_WIDTH:-900}
+      SCREEN_HEIGHT: ${SCREEN_HEIGHT:-1500}
+    volumes:
+      - phone-data:/data
+
+volumes:
+  phone-data:
