@@ -38,8 +38,20 @@ rm -f "${ANDROID_AVD_HOME}/${AVD_NAME}.avd/"*.lock
 
 until [ -e /tmp/.X11-unix/X0 ]; do sleep 1; done
 
-# Speed-ups once Android has booted (runs in the background).
+# Stretch the emulator window to fill the whole virtual display, so the phone
+# fills the browser instead of sitting small in a corner.
+fit_window() {
+    local wid
+    wid="$(xdotool search --name "Android Emulator - " 2>/dev/null | head -1)"
+    [ -n "${wid}" ] || return 1
+    xdotool windowmove "${wid}" 0 0 windowsize "${wid}" "${PHONE_WIDTH}" "${PHONE_HEIGHT}"
+}
+
+# Fit the window, then apply speed-ups once Android has booted (runs in the background).
 (
+    until fit_window; do sleep 1; done
+    sleep 3
+    fit_window || true
     adb wait-for-device
     until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do sleep 3; done
     adb shell settings put global window_animation_scale 0.5
@@ -47,6 +59,7 @@ until [ -e /tmp/.X11-unix/X0 ]; do sleep 1; done
     adb shell settings put global animator_duration_scale 0.5
     adb shell settings put system screen_off_timeout 2147483647
     adb shell svc power stayon true
+    fit_window || true
     echo "=================================================="
     echo " Phone booted. Open http://localhost:6080 in a browser"
     echo "=================================================="
