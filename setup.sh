@@ -13,6 +13,14 @@ if [ ! -e /dev/kvm ]; then
     echo "Loading KVM kernel module..."
     sudo modprobe kvm_intel 2>/dev/null || sudo modprobe kvm_amd 2>/dev/null || true
 fi
+if [ ! -e /dev/kvm ] && grep -qi microsoft /proc/version; then
+    echo "/dev/kvm is missing inside WSL. In Windows, create C:\\Users\\<you>\\.wslconfig containing:"
+    echo "    [wsl2]"
+    echo "    nestedVirtualization=true"
+    echo "then run 'wsl --shutdown' in PowerShell, reopen Ubuntu and run ./setup.sh again."
+    echo "(Needs Windows 11 and virtualization enabled in BIOS.)"
+    exit 1
+fi
 if [ ! -e /dev/kvm ]; then
     echo "/dev/kvm still missing. Enable virtualization in BIOS/UEFI and reboot."
     exit 1
@@ -27,7 +35,10 @@ if ! command -v docker > /dev/null || ! docker compose version > /dev/null 2>&1;
         echo "Falling back to Docker's official install script..."
         curl -fsSL https://get.docker.com | sudo sh
     }
-    sudo systemctl enable --now docker
+fi
+if ! sudo docker info > /dev/null 2>&1; then
+    # WSL without systemd has no systemctl; fall back to the service command.
+    sudo systemctl enable --now docker 2>/dev/null || sudo service docker start
 fi
 if ! groups | grep -qw docker; then
     sudo usermod -aG docker "$USER"
