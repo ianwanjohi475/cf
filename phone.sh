@@ -46,6 +46,11 @@ case "$1" in
         adb_in install -r /tmp/app.apk
         docker exec cloudphone rm -f /tmp/app.apk
         ;;
+    upload)
+        [ -f "$2" ] || { echo "Usage: ./phone.sh upload photo.jpg"; exit 1; }
+        curl -fsS ${VNC_PASSWORD:+-u "phone:${VNC_PASSWORD}"} -F "file=@$2" "http://localhost:${PORT}/upload"
+        echo
+        ;;
     home)  adb_in shell input keyevent KEYCODE_HOME ;;
     back)  adb_in shell input keyevent KEYCODE_BACK ;;
     rotate)
@@ -63,7 +68,7 @@ case "$1" in
         echo "Phone erased. Run ./phone.sh start to create a fresh one."
         ;;
     *)
-        echo "Usage: ./phone.sh {start|stop|restart|status|logs|install <apk>|home|back|rotate|shell|reset}"
+        echo "Usage: ./phone.sh {start|stop|restart|status|logs|install <apk>|upload <file>|home|back|rotate|shell|reset}"
         exit 1
         ;;
 esac

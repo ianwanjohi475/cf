@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cloud Phone</title>
+<style>
+  :root { --bg:#111; --bar:#1c1c1e; --text:#eee; --muted:#9a9aa0; --accent:#1a73e8; --ok:#34a853; --err:#ea4335; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text); font-family:system-ui, sans-serif; }
+  body { display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:10px; padding:8px 12px; background:var(--bar); flex-wrap:wrap; }
+  header.drag { outline:2px dashed var(--accent); outline-offset:-4px; }
+  h1 { font-size:15px; margin:0 8px 0 0; font-weight:600; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:7px 12px; font-size:14px; cursor:pointer; }
+  button.secondary { background:#3a3a3c; }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { font-size:13px; color:var(--muted); flex:1; min-width:180px; }
+  #status.ok { color:var(--ok); } #status.err { color:var(--err); }
+  progress { width:120px; display:none; }
+  iframe { flex:1; width:100%; border:0; }
+</style>
+</head>
+<body>
+<header id="bar">
+  <h1>Cloud Phone</h1>
+  <button id="pickMedia">Upload photo / video</button>
+  <button id="pickAny" class="secondary">Upload file</button>
+  <input id="mediaInput" type="file" accept="image/*,video/*" multiple hidden>
+  <input id="anyInput" type="file" multiple hidden>
+  <progress id="progress" max="100" value="0"></progress>
+  <span id="status">Tip: you can also drop files onto this bar.</span>
+</header>
+<iframe id="screen" src="novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000&show_dot=1&path=websockify" allow="clipboard-read; clipboard-write"></iframe>
+<script>
+  const statusEl = document.getElementById('status');
+  const progress = document.getElementById('progress');
+  const buttons = [document.getElementById('pickMedia'), document.getElementById('pickAny')];
+
+  function setStatus(text, kind) {
+    statusEl.textContent = text;
+    statusEl.className = kind || '';
+  }
+
+  function upload(files) {
+    if (!files.length) return;
+    const form = new FormData();
+    for (const f of files) form.append('file', f, f.name);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', 'upload');
+    xhr.upload.onprogress = e => { if (e.lengthComputable) progress.value = 100 * e.loaded / e.total; };
+    xhr.onload = () => {
+      let res = {};
+      try { res = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status === 200) {
+        const where = [...new Set(res.saved.map(s => s.folder))].join(', ');
+        setStatus(`Sent ${res.saved.length} file(s) to the phone (${where}). Pick it from Gallery / Files.`, 'ok');
+      } else {
+        setStatus(res.error || `Upload failed (${xhr.status}).`, 'err');
+      }
+      done();
+    };
+    xhr.onerror = () => { setStatus('Upload failed: connection lost.', 'err'); done(); };
+    progress.value = 0;
+    progress.style.display = 'inline-block';
+    buttons.forEach(b => b.disabled = true);
+    setStatus(`Uploading ${files.length} file(s)...`);
+    xhr.send(form);
+  }
+
+  function done() {
+    progress.style.display = 'none';
+    buttons.forEach(b => b.disabled = false);
+    document.getElementById('screen').focus();
+  }
+
+  for (const [btn, input] of [['pickMedia', 'mediaInput'], ['pickAny', 'anyInput']]) {
+    const el = document.getElementById(input);
+    document.getElementById(btn).onclick = () => el.click();
+    el.onchange = () => { upload([...el.files]); el.value = ''; };
+  }
+
+  const bar = document.getElementById('bar');
+  bar.addEventListener('dragover', e => { e.preventDefault(); bar.classList.add('drag'); });
+  bar.addEventListener('dragleave', () => bar.classList.remove('drag'));
+  bar.addEventListener('drop', e => {
+    e.preventDefault();
+    bar.classList.remove('drag');
+    upload([...e.dataTransfer.files]);
+  });
+</script>
+</body>
+</html>

@@ -6,7 +6,7 @@ so you can sign in with your Google account and install apps from the Play Store
 such as Chrome, WhatsApp and TikTok. Apps, accounts and files are kept between restarts.
 
 ```
- Browser  ──►  noVNC (port 6080)  ──►  VNC  ──►  Android emulator (KVM)  [Docker container]
+ Browser  ──►  web server + noVNC (port 6080)  ──►  VNC  ──►  Android emulator (KVM)  [Docker container]
 ```
 
 ## Requirements
@@ -38,6 +38,23 @@ The emulator's side toolbar has volume, rotate and power buttons.
 
 You can also install an APK file directly: `./phone.sh install myapp.apk`
 
+## Send photos and videos to the phone
+
+The bar above the phone has **Upload photo / video** and **Upload file** buttons
+(you can also drag files onto the bar). Photos and videos go to the phone's gallery
+(`DCIM/Uploads`), and other files go to `Download`.
+
+Then, when an app or website asks for a picture or video:
+
+- Choose **Gallery**, **Photos**, **Files** or **Browse** (not **Camera**) and pick your file.
+- In Chrome, an upload button usually shows a menu. Pick **Files** or **Photos**.
+
+### About the camera
+
+The phone has no real camera. Its camera shows a built-in test picture (a virtual room).
+Live-camera features such as Google Meet video will use that test picture.
+Use Meet's **Present** or **Share screen** button to show your content instead.
+
 ## Commands
 
 | Command | What it does |
@@ -48,6 +65,7 @@ You can also install an APK file directly: `./phone.sh install myapp.apk`
 | `./phone.sh status` | Show whether Android has booted |
 | `./phone.sh logs` | Show live logs |
 | `./phone.sh install app.apk` | Install an APK |
+| `./phone.sh upload photo.jpg` | Send a photo/video/file to the phone |
 | `./phone.sh home` / `back` / `rotate` | Press buttons |
 | `./phone.sh shell` | Open an adb shell |
 | `./phone.sh reset` | **Erase everything** and start fresh |
