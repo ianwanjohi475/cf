@@ -31,6 +31,7 @@ camera_on() {
     if grep -qi microsoft /proc/version; then
         [ -f "${CAM_KO}" ] || { echo "No camera driver yet - run ./setup-camera.sh"; return 1; }
         if ! sudo modprobe videodev 2> /dev/null; then
+            sudo insmod "${CAM_DIR}/led-class-$(uname -r).ko" 2> /dev/null || true
             sudo insmod "${CAM_DIR}/mc-$(uname -r).ko" 2> /dev/null || true
             sudo insmod "${CAM_DIR}/videodev-$(uname -r).ko"
         fi

@@ -77,6 +77,7 @@ if [ ! -f "${WSL_KO}" ]; then
     mkdir -p "${DATA_DIR}"
     cp "${BUILD}/v4l2loopback/v4l2loopback.ko" "${WSL_KO}"
     # Keep the media modules too, in case this WSL install doesn't ship them.
+    cp drivers/leds/led-class.ko "${DATA_DIR}/led-class-${KREL}.ko" 2>/dev/null || true
     cp drivers/media/mc/mc.ko "${DATA_DIR}/mc-${KREL}.ko" 2>/dev/null || true
     cp drivers/media/v4l2-core/videodev.ko "${DATA_DIR}/videodev-${KREL}.ko" 2>/dev/null || true
     cd - > /dev/null
