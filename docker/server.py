@@ -1,4 +1,4 @@
-"""Cloud Phone web server: phone screen (noVNC) plus photo/video upload into the phone."""
+"""Cloud Phone web server: phone screen (noVNC), uploads, clipboard sync and live camera."""
 import asyncio
 import base64
 import hmac
@@ -16,6 +16,10 @@ PASSWORD = os.environ.get("VNC_PASSWORD", "")
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".bmp"}
 VIDEO_EXT = {".mp4", ".mov", ".3gp", ".mkv", ".webm", ".avi", ".m4v"}
+CAMERA_DEV = os.environ.get("CAMERA_DEV", "/dev/video0")
+CAMERA_READY = "/tmp/camera-ready"
+CAMERA_FPS = 15
+CAMERA_SIZE = (640, 480)
 MEDIA_DIR = "/sdcard/DCIM/Uploads"  # shows up in Gallery, Photos and photo pickers
 OTHER_DIR = "/sdcard/Download"
 
@@ -120,9 +124,116 @@ async def upload(request):
     return web.json_response({"saved": saved})
 
 
+# ---------------------------------------------------------------- clipboard
+# The emulator syncs the X clipboard with Android's clipboard, so we only need
+# to read and write the X clipboard here.
+
+async def clipboard_get(request):
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "xclip", "-selection", "clipboard", "-o",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(proc.communicate(), 2)
+    except (OSError, asyncio.TimeoutError):
+        out = b""
+    return web.json_response({"text": out.decode(errors="replace")})
+
+
+async def clipboard_set(request):
+    data = await request.json()
+    text = str(data.get("text", ""))
+    # xclip stays in the background to serve the clipboard, so don't wait on its output.
+    proc = await asyncio.create_subprocess_exec(
+        "xclip", "-selection", "clipboard", "-i",
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+    proc.stdin.write(text.encode())
+    proc.stdin.close()
+    await proc.wait()
+    if data.get("paste"):
+        await asyncio.sleep(0.4)  # let the emulator copy it into Android first
+        await run("adb", "shell", "input", "keyevent", "KEYCODE_PASTE")
+    return web.json_response({"ok": True})
+
+
+# ------------------------------------------------------------------- camera
+# The phone's camera is a virtual webcam (v4l2loopback). We keep it fed with
+# frames all the time: live frames from the browser's webcam while it's on,
+# otherwise a plain "camera off" frame.
+
+class Camera:
+    def __init__(self):
+        self.available = os.path.exists(CAMERA_DEV)
+        self.latest = None        # last JPEG frame from a browser
+        self.latest_at = 0.0
+        self.placeholder = None
+
+    async def start(self, app):
+        if self.available:
+            app["camera_task"] = asyncio.create_task(self.feed_forever())
+
+    async def make_placeholder(self):
+        w, h = CAMERA_SIZE
+        path = "/tmp/camera-off.jpg"
+        await run("ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", f"color=c=0x202124:s={w}x{h}",
+                  "-frames:v", "1", path)
+        with open(path, "rb") as f:
+            self.placeholder = f.read()
+
+    async def feed_forever(self):
+        await self.make_placeholder()
+        w, h = CAMERA_SIZE
+        while True:
+            proc = await asyncio.create_subprocess_exec(
+                # No probing/buffering: frames must reach the phone immediately.
+                "ffmpeg", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0",
+                "-fflags", "nobuffer", "-flags", "low_delay", "-f", "image2pipe", "-c:v", "mjpeg",
+                "-framerate", str(CAMERA_FPS), "-i", "pipe:0",
+                "-vf", f"scale={w}:{h}", "-pix_fmt", "yuyv422", "-f", "v4l2", CAMERA_DEV,
+                stdin=asyncio.subprocess.PIPE)
+            sent = 0
+            next_at = time.monotonic()
+            try:
+                while proc.returncode is None:
+                    live = self.latest and time.monotonic() - self.latest_at < 2
+                    proc.stdin.write(self.latest if live else self.placeholder)
+                    await proc.stdin.drain()
+                    sent += 1
+                    if sent == CAMERA_FPS:
+                        open(CAMERA_READY, "w").close()  # the emulator waits for this
+                    next_at += 1 / CAMERA_FPS
+                    await asyncio.sleep(max(0, next_at - time.monotonic()))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            await proc.wait()
+            print("camera feed stopped, restarting", flush=True)
+            await asyncio.sleep(1)
+
+    async def websocket(self, request):
+        """Receives JPEG frames from the browser's webcam."""
+        ws = web.WebSocketResponse(max_msg_size=4 * 1024 * 1024)
+        await ws.prepare(request)
+        async for msg in ws:
+            if msg.type == WSMsgType.BINARY and msg.data[:2] == b"\xff\xd8":
+                self.latest = msg.data
+                self.latest_at = time.monotonic()
+        self.latest = None
+        return ws
+
+
+async def status(request):
+    return web.json_response({"camera": request.app["camera"].available})
+
+
 def main():
     app = web.Application(middlewares=[password_check], client_max_size=4 * 1024**3)
+    camera = Camera()
+    app["camera"] = camera
+    app.on_startup.append(camera.start)
     app.router.add_get("/", index)
+    app.router.add_get("/status", status)
+    app.router.add_get("/clipboard", clipboard_get)
+    app.router.add_post("/clipboard", clipboard_set)
+    app.router.add_get("/camera", camera.websocket)
     app.router.add_get("/websockify", vnc_proxy)
     app.router.add_post("/upload", upload)
     app.router.add_static("/novnc/", NOVNC_DIR)

@@ -19,7 +19,7 @@ ENV PATH=${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/emulat
 # and the shared libraries the Android emulator needs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl unzip openjdk-17-jre-headless \
-        supervisor xvfb xdotool x11vnc novnc python3-aiohttp procps \
+        supervisor xvfb xdotool xclip ffmpeg x11vnc novnc python3-aiohttp procps \
         libgl1 libgl1-mesa-dri libegl1 libpulse0 libnss3 libasound2 \
         libxcomposite1 libxcursor1 libxi6 libxtst6 libxkbfile1 libxdamage1 \
         libxrandr2 libdbus-1-3 libxkbcommon-x11-0 libx11-xcb1 libfontconfig1 \
@@ -53,4 +53,4 @@ EXPOSE 6080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
     CMD [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]
 
-CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/supervisord.conf"]
+CMD ["/bin/sh", "-c", "rm -f /tmp/camera-ready && exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf"]

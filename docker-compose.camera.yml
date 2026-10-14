@@ -1,0 +1,5 @@
+# Added automatically by phone.sh when the virtual camera (/dev/video42) exists.
+services:
+  phone:
+    devices:
+      - /dev/video42:/dev/video0

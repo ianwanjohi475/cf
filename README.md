@@ -49,11 +49,29 @@ Then, when an app or website asks for a picture or video:
 - Choose **Gallery**, **Photos**, **Files** or **Browse** (not **Camera**) and pick your file.
 - In Chrome, an upload button usually shows a menu. Pick **Files** or **Photos**.
 
-### About the camera
+## Live camera (Google Meet, WhatsApp video, selfies...)
 
-The phone has no real camera. Its camera shows a built-in test picture (a virtual room).
-Live-camera features such as Google Meet video will use that test picture.
-Use Meet's **Present** or **Share screen** button to show your content instead.
+The phone's camera can be the **live webcam of the device you open the page on**,
+just like a real phone camera. One-time setup:
+
+```bash
+./setup-camera.sh     # on WSL this builds a driver once (20-60 min)
+./phone.sh start
+```
+
+Then click **Camera: off** in the top bar so it turns red (**Camera: ON**) and allow
+the webcam. Your live picture shows as a small preview, and every app in the phone
+(Meet, WhatsApp, Camera...) now sees it as the phone's front and back camera.
+When it's off, apps see a dark grey picture.
+
+The browser only allows webcams on `http://localhost` or an `https://` address.
+
+## Copy and paste
+
+- **PC to phone:** copy on your PC, tap a text box in the phone, press **Ctrl+V**.
+  The first time, the browser asks to allow clipboard access: click **Allow**.
+- **Phone to PC:** copy text in the phone. It lands on your PC clipboard automatically.
+- If Ctrl+V doesn't work, use the **Paste text** button.
 
 ## Commands
 
@@ -67,6 +85,7 @@ Use Meet's **Present** or **Share screen** button to show your content instead.
 | `./phone.sh install app.apk` | Install an APK |
 | `./phone.sh upload photo.jpg` | Send a photo/video/file to the phone |
 | `./phone.sh home` / `back` / `rotate` | Press buttons |
+| `./phone.sh camera-on` | Re-enable the camera device (after a PC/WSL restart) |
 | `./phone.sh crashlog` | Show why an app crashed |
 | `./phone.sh shell` | Open an adb shell |
 | `./phone.sh reset` | **Erase everything** and start fresh |
@@ -89,18 +108,42 @@ then open `http://<your-PC-IP>:6080` (find the IP with `hostname -I`).
 Don't open port 6080 on your router. Use [Tailscale](https://tailscale.com/download/linux)
 on the PC and on your other device, then open `http://<pc-tailscale-ip>:6080`.
 
+The live camera and clipboard only work over `https://` (or on `localhost`). To get an
+https address, run `sudo tailscale serve --bg 6080` and open the `https://...ts.net`
+address it prints.
+
 ### Run it on a cloud server
 
 This works on any Linux VPS that exposes `/dev/kvm`: a bare-metal server or a VM with
 nested virtualization enabled. Most cheap VPSes don't have KVM. Run the same
 `./setup.sh` and `./phone.sh start` there.
 
+## Speed
+
+The phone runs without a graphics card (WSL and Docker can't share it), so the PC's
+processor draws everything. To make it faster:
+
+1. **Give WSL more power.** In Windows, edit `C:\Users\<you>\.wslconfig`:
+   ```
+   [wsl2]
+   nestedVirtualization=true
+   memory=10GB
+   processors=8
+   ```
+   Use about 2/3 of your PC's RAM and cores. Then run `wsl --shutdown` in PowerShell.
+2. **Match the phone to it.** In `.env`, set `PHONE_CORES` (e.g. 6) and `PHONE_RAM_MB=6144`.
+3. **Lower the screen resolution.** This gives the biggest speed-up. In `.env`, set
+   `PHONE_WIDTH=540`, `PHONE_HEIGHT=1200`, `PHONE_DENSITY=240`.
+4. Run `./phone.sh reset` (this **erases the phone**), then `./phone.sh start`.
+
+Animations inside the phone are switched off automatically, which also helps.
+The first 10 minutes after a fresh phone are slow while Google Play updates itself.
+
 ## Troubleshooting
 
 - **`/dev/kvm missing`**: turn on Intel VT-x / AMD SVM ("Virtualization") in BIOS and reboot.
   Check with `ls /dev/kvm`.
 - **Black screen in browser**: Android is still booting. Wait and refresh, or check `./phone.sh logs`.
-- **Slow or laggy**: give more cores/RAM in `.env`, close other heavy programs, or lower
-  `PHONE_WIDTH/HEIGHT` (e.g. 540x1200, density 240) and run `./phone.sh reset`.
+- **Slow or laggy**: see "Speed" below.
 - **Some banking or game apps refuse to run**: some apps block all emulators. A real phone is
   the only fix for those.

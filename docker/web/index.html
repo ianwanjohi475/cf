@@ -18,6 +18,8 @@
   #status { font-size:13px; color:var(--muted); flex:1; min-width:180px; }
   #status.ok { color:var(--ok); } #status.err { color:var(--err); }
   progress { width:120px; display:none; }
+  button.on { background:var(--err); }
+  #preview { width:64px; height:48px; object-fit:cover; border-radius:4px; background:#000; display:none; transform:scaleX(-1); }
   iframe { flex:1; width:100%; border:0; }
 </style>
 </head>
@@ -26,10 +28,13 @@
   <h1>Cloud Phone</h1>
   <button id="pickMedia">Upload photo / video</button>
   <button id="pickAny" class="secondary">Upload file</button>
+  <button id="cameraBtn" class="secondary" title="Use this device's webcam as the phone's camera">Camera: off</button>
+  <video id="preview" muted playsinline></video>
+  <button id="pasteBtn" class="secondary" title="Type or paste text to send into the phone">Paste text</button>
   <input id="mediaInput" type="file" accept="image/*,video/*" multiple hidden>
   <input id="anyInput" type="file" multiple hidden>
   <progress id="progress" max="100" value="0"></progress>
-  <span id="status">Tip: you can also drop files onto this bar.</span>
+  <span id="status">Ctrl+V pastes your PC clipboard into the phone. Drop files on this bar to upload.</span>
 </header>
 <iframe id="screen" src="novnc/vnc.html?autoconnect=1&resize=scale&reconnect=1&reconnect_delay=2000&show_dot=1&path=websockify" allow="clipboard-read; clipboard-write"></iframe>
 <script>
@@ -79,6 +84,134 @@
     document.getElementById(btn).onclick = () => el.click();
     el.onchange = () => { upload([...el.files]); el.value = ''; };
   }
+
+  // ---------------------------------------------------------- clipboard
+  // PC -> phone: Ctrl+V inside the phone screen sends your PC clipboard and pastes it.
+  // Phone -> PC: text copied on the phone is put on your PC clipboard.
+  const screenFrame = document.getElementById('screen');
+  let lastPhoneClip = null;
+  let lastSentClip = null;
+
+  async function sendToPhone(text) {
+    lastSentClip = text;
+    const r = await fetch('clipboard', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text, paste: true}),
+    });
+    setStatus(r.ok ? 'Pasted into the phone.' : 'Paste failed.', r.ok ? 'ok' : 'err');
+  }
+
+  async function pasteFromPC() {
+    try {
+      const text = await screenFrame.contentWindow.navigator.clipboard.readText();
+      if (text) await sendToPhone(text);
+    } catch (e) {
+      setStatus('Allow clipboard access for this page (icon in the address bar), or use "Paste text".', 'err');
+    }
+  }
+
+  screenFrame.addEventListener('load', () => {
+    screenFrame.contentDocument.addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'v') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        pasteFromPC();
+      }
+    }, true);
+  });
+
+  document.getElementById('pasteBtn').onclick = () => {
+    const text = prompt('Text to paste into the phone (tap a text box in the phone first):');
+    if (text) sendToPhone(text);
+  };
+
+  async function copyToPC(text) {
+    for (const nav of [screenFrame.contentWindow.navigator, navigator]) {
+      try { await nav.clipboard.writeText(text); return true; } catch (e) {}
+    }
+    return false;
+  }
+
+  async function pollPhoneClipboard() {
+    try {
+      const {text} = await (await fetch('clipboard')).json();
+      if (lastPhoneClip !== null && text && text !== lastPhoneClip && text !== lastSentClip) {
+        if (await copyToPC(text)) {
+          setStatus('Copied from the phone to your PC clipboard.', 'ok');
+        } else {
+          setStatus('Phone copied text. Click here to copy it to your PC.', 'ok');
+          statusEl.onclick = async () => { await copyToPC(text); statusEl.onclick = null; setStatus('Copied.', 'ok'); };
+        }
+      }
+      lastPhoneClip = text;
+    } catch (e) {}
+    setTimeout(pollPhoneClipboard, 1500);
+  }
+  pollPhoneClipboard();
+
+  // ------------------------------------------------------------- camera
+  // Streams this device's webcam into the phone; apps (Meet, WhatsApp...) see it
+  // as the phone's camera.
+  const cameraBtn = document.getElementById('cameraBtn');
+  const preview = document.getElementById('preview');
+  const canvas = document.createElement('canvas');
+  canvas.width = 640; canvas.height = 480;
+  let cam = null;
+
+  async function cameraOn() {
+    if (!window.isSecureContext || !navigator.mediaDevices) {
+      setStatus('The browser only allows the webcam on http://localhost or an https:// address.', 'err');
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({video: {width: {ideal: 640}, height: {ideal: 480}}, audio: false});
+    } catch (e) {
+      setStatus('Webcam blocked or not found: ' + e.message, 'err');
+      return;
+    }
+    preview.srcObject = stream;
+    preview.style.display = 'inline-block';
+    await preview.play();
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host +
+                             location.pathname.replace(/[^/]*$/, '') + 'camera');
+    const ctx = canvas.getContext('2d');
+    const timer = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 500000 || !preview.videoWidth) return;
+      // Crop the webcam picture to 4:3 (centre) so it isn't stretched.
+      const vw = preview.videoWidth, vh = preview.videoHeight;
+      const sw = Math.min(vw, vh * 4 / 3), sh = sw * 3 / 4;
+      ctx.drawImage(preview, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, 640, 480);
+      canvas.toBlob(b => { if (b && ws.readyState === WebSocket.OPEN) ws.send(b); }, 'image/jpeg', 0.75);
+    }, 1000 / 15);
+    ws.onclose = () => { if (cam && cam.ws === ws) cameraOff('Camera connection lost.'); };
+    cam = {stream, ws, timer};
+    cameraBtn.textContent = 'Camera: ON';
+    cameraBtn.classList.add('on');
+    setStatus('Live camera is on. Apps in the phone now see your webcam.', 'ok');
+  }
+
+  function cameraOff(message) {
+    if (!cam) return;
+    clearInterval(cam.timer);
+    cam.stream.getTracks().forEach(t => t.stop());
+    const ws = cam.ws;
+    cam = null;
+    ws.close();
+    preview.style.display = 'none';
+    cameraBtn.textContent = 'Camera: off';
+    cameraBtn.classList.remove('on');
+    setStatus(message || 'Camera off.');
+  }
+
+  cameraBtn.onclick = () => cam ? cameraOff() : cameraOn();
+
+  fetch('status').then(r => r.json()).then(s => {
+    if (!s.camera) {
+      cameraBtn.disabled = true;
+      cameraBtn.title = 'Live camera not set up: run ./setup-camera.sh, then ./phone.sh start';
+    }
+  }).catch(() => {});
 
   const bar = document.getElementById('bar');
   bar.addEventListener('dragover', e => { e.preventDefault(); bar.classList.add('drag'); });
