@@ -12,13 +12,15 @@ CAM_OPTS=(devices=1 video_nr=42 card_label=CloudPhoneCam exclusive_caps=1)
 # kernels, or ones built on this PC by setup-camera.sh.
 CAM_PREBUILT="camera-drivers/$(uname -r)"
 CAM_BUILT="${HOME}/.local/share/cloudphone/$(uname -r)"
+V4L_SYS="${V4L_SYS:-/sys/class/video4linux}"
 
 adb_in() { docker exec cloudphone adb "$@"; }
 
 # Include the camera device in the container only when it exists.
 compose() {
-    if [ -e /dev/video42 ]; then
-        docker compose -f docker-compose.yml -f docker-compose.camera.yml "$@"
+    local node
+    if node="$(cam_node 2> /dev/null)"; then
+        CAM_HOST_DEV="${node}" docker compose -f docker-compose.yml -f docker-compose.camera.yml "$@"
     else
         docker compose -f docker-compose.yml "$@"
     fi
@@ -40,26 +42,62 @@ camera_driver_installed() {
 
 module_loaded() { grep -q "^$1 " /proc/modules 2> /dev/null; }
 
+# Prints the /dev path of our virtual camera, found by its name in sysfs. Creates
+# the /dev node when the kernel registered the camera but no node appeared
+# (this happens on WSL).
+cam_node() {
+    local d node major minor
+    for d in "${V4L_SYS}"/video*; do
+        [ -r "${d}/name" ] && [ "$(cat "${d}/name")" = CloudPhoneCam ] || continue
+        node="/dev/$(basename "${d}")"
+        if [ ! -e "${node}" ]; then
+            IFS=: read -r major minor < "${d}/dev"
+            sudo mknod -m 666 "${node}" c "${major}" "${minor}" >&2 || return 1
+        fi
+        echo "${node}"
+        return 0
+    done
+    return 1
+}
+
+camera_diagnostics() {
+    echo "---- camera diagnostics ----"
+    echo "Kernel modules:"; grep -E '^(v4l2loopback|videodev|mc|led_class) ' /proc/modules || echo "  (none loaded)"
+    echo "Video devices:"
+    for d in "${V4L_SYS}"/video*; do [ -e "${d}" ] && echo "  $(basename "${d}"): $(cat "${d}/name" 2> /dev/null) dev=$(cat "${d}/dev" 2> /dev/null)"; done
+    ls -l /dev/video* 2> /dev/null || echo "  (no /dev/video* nodes)"
+    echo "Kernel messages:"; sudo dmesg 2> /dev/null | grep -iE 'v4l2|video|loopback|module' | tail -n 15
+    echo "----------------------------"
+}
+
 camera_on() {
-    [ -e /dev/video42 ] && return 0
+    local node="" d
+    if node="$(cam_node 2> /dev/null)"; then
+        echo "Camera device ready (${node})."
+        return 0
+    fi
+    echo "Loading camera driver (may ask for your Ubuntu password)..."
     if is_wsl; then
-        local d
         d="$(cam_driver_dir)" || { echo "No camera driver for kernel $(uname -r) yet - run ./setup-camera.sh"; return 1; }
-        echo "Loading camera driver (may ask for your Ubuntu password)..."
         if ! module_loaded videodev && ! sudo modprobe videodev 2> /dev/null; then
             module_loaded led_class || sudo insmod "${d}/led-class.ko" 2> /dev/null || true
             module_loaded mc || sudo insmod "${d}/mc.ko" 2> /dev/null || true
-            sudo insmod "${d}/videodev.ko" || { sudo dmesg | tail -n 5; return 1; }
+            sudo insmod "${d}/videodev.ko" || { camera_diagnostics; return 1; }
         fi
-        if ! module_loaded v4l2loopback; then
-            sudo insmod "${d}/v4l2loopback.ko" "${CAM_OPTS[@]}" || { sudo dmesg | tail -n 5; return 1; }
-        fi
+        # A copy loaded earlier without our camera (other settings): reload it.
+        module_loaded v4l2loopback && sudo rmmod v4l2loopback
+        sudo insmod "${d}/v4l2loopback.ko" "${CAM_OPTS[@]}" || { camera_diagnostics; return 1; }
     else
-        sudo modprobe v4l2loopback "${CAM_OPTS[@]}"
+        module_loaded v4l2loopback && sudo rmmod v4l2loopback
+        sudo modprobe v4l2loopback "${CAM_OPTS[@]}" || { camera_diagnostics; return 1; }
     fi
-    for _ in 1 2 3 4 5; do [ -e /dev/video42 ] && break; sleep 1; done
-    [ -e /dev/video42 ] || { echo "Driver loaded but /dev/video42 did not appear."; return 1; }
-    echo "Camera device ready (/dev/video42)."
+    for _ in 1 2 3 4 5; do node="$(cam_node)" && break; sleep 1; done
+    if [ -z "${node}" ]; then
+        echo "The driver loaded but the camera did not appear."
+        camera_diagnostics
+        return 1
+    fi
+    echo "Camera device ready (${node})."
 }
 
 case "$1" in
@@ -139,13 +177,14 @@ case "$1" in
             modinfo v4l2loopback > /dev/null 2>&1 && ok "camera driver installed" \
                 || bad "camera driver not installed" "./setup-camera.sh"
         fi
-        if [ ! -e /dev/video42 ]; then
+        if cam_node > /dev/null 2>&1; then
+            ok "camera device $(cam_node) exists"
+        else
             echo "  ...    loading the camera driver:"
             camera_on 2>&1 | sed 's/^/         /' || true
+            cam_node > /dev/null 2>&1 && ok "camera device $(cam_node) exists" \
+                || bad "camera device missing (see the diagnostics above)" "send this output to get it fixed"
         fi
-        [ -e /dev/video42 ] && ok "camera device /dev/video42 exists" \
-            || bad "camera device /dev/video42 missing (driver failed to load, see the error above)" \
-                   "send this output to get it fixed"
         docker ps --format '{{.Names}}' | grep -qx cloudphone && ok "phone container is running" \
             || bad "phone container not running" "./phone.sh start"
         docker exec cloudphone test -e /dev/video0 && ok "phone container has the camera" \

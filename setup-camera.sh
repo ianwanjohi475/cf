@@ -1,7 +1,7 @@
 #!/bin/bash
 # Gives the cloud phone a live camera.
 #
-# Creates a virtual webcam (/dev/video42). The phone uses it as its camera, and
+# Creates a virtual webcam named CloudPhoneCam (normally /dev/video42). The phone uses it as its camera, and
 # the picture comes from the webcam of whatever device you open the phone page on.
 #
 # Native Ubuntu: installs the v4l2loopback driver from apt.
@@ -14,8 +14,8 @@ MOD_OPTS=(devices=1 video_nr=42 card_label=CloudPhoneCam exclusive_caps=1)
 DATA_DIR="${HOME}/.local/share/cloudphone"
 WSL_DIR="${DATA_DIR}/$(uname -r)"
 
-if [ -e /dev/video42 ]; then
-    echo "Camera device is ready (/dev/video42). Run: ./phone.sh start"
+if grep -qx CloudPhoneCam /sys/class/video4linux/*/name 2> /dev/null; then
+    echo "Camera device is ready. Run: ./phone.sh start"
     exit 0
 fi
 
