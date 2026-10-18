@@ -4,6 +4,9 @@ services:
     image: cloudphone:latest
     container_name: cloudphone
     restart: unless-stopped
+    # Privileged so the container can create the live camera device itself
+    # (see docker/start-container.sh). It also covers /dev/kvm.
+    privileged: true
     devices:
       - /dev/kvm:/dev/kvm
     shm_size: 2gb

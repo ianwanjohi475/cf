@@ -43,6 +43,7 @@ COPY supervisord.conf /etc/supervisor/conf.d/cloudphone.conf
 COPY start-emulator.sh /usr/local/bin/start-emulator.sh
 COPY start-vnc.sh /usr/local/bin/start-vnc.sh
 COPY start-xvfb.sh /usr/local/bin/start-xvfb.sh
+COPY start-container.sh /usr/local/bin/start-container.sh
 COPY server.py /opt/cloudphone/server.py
 COPY web /opt/cloudphone/web
 RUN chmod +x /usr/local/bin/start-*.sh
@@ -53,4 +54,4 @@ EXPOSE 6080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
     CMD [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]
 
-CMD ["/bin/sh", "-c", "rm -f /tmp/camera-ready && exec /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf"]
+CMD ["/usr/local/bin/start-container.sh"]

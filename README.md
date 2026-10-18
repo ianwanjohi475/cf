@@ -70,6 +70,8 @@ When it's off, apps see a dark grey picture.
 
 The browser only allows webcams on `http://localhost` or an `https://` address.
 
+The phone container runs privileged so it can attach this camera itself.
+
 If the camera doesn't work, run `./phone.sh doctor`. It checks each step and tells you the fix.
 
 ## Copy and paste

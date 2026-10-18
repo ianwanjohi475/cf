@@ -16,15 +16,7 @@ V4L_SYS="${V4L_SYS:-/sys/class/video4linux}"
 
 adb_in() { docker exec cloudphone adb "$@"; }
 
-# Include the camera device in the container only when it exists.
-compose() {
-    local node
-    if node="$(cam_node 2> /dev/null)"; then
-        CAM_HOST_DEV="${node}" docker compose -f docker-compose.yml -f docker-compose.camera.yml "$@"
-    else
-        docker compose -f docker-compose.yml "$@"
-    fi
-}
+compose() { docker compose -f docker-compose.yml "$@"; }
 
 is_wsl() { grep -qi microsoft /proc/version; }
 
@@ -42,23 +34,9 @@ camera_driver_installed() {
 
 module_loaded() { grep -q "^$1 " /proc/modules 2> /dev/null; }
 
-# Prints the /dev path of our virtual camera, found by its name in sysfs. Creates
-# the /dev node when the kernel registered the camera but no node appeared
-# (this happens on WSL).
-cam_node() {
-    local d node major minor
-    for d in "${V4L_SYS}"/video*; do
-        [ -r "${d}/name" ] && [ "$(cat "${d}/name")" = CloudPhoneCam ] || continue
-        node="/dev/$(basename "${d}")"
-        if [ ! -e "${node}" ]; then
-            IFS=: read -r major minor < "${d}/dev"
-            sudo mknod -m 666 "${node}" c "${major}" "${minor}" >&2 || return 1
-        fi
-        echo "${node}"
-        return 0
-    done
-    return 1
-}
+# True when the kernel has our virtual camera (found by its name). The phone
+# container creates its own device file for it, so no /dev node is needed here.
+cam_registered() { grep -qx CloudPhoneCam "${V4L_SYS}"/video*/name 2> /dev/null; }
 
 camera_diagnostics() {
     echo "---- camera diagnostics ----"
@@ -71,9 +49,9 @@ camera_diagnostics() {
 }
 
 camera_on() {
-    local node="" d
-    if node="$(cam_node 2> /dev/null)"; then
-        echo "Camera device ready (${node})."
+    local d
+    if cam_registered; then
+        echo "Camera driver is loaded."
         return 0
     fi
     echo "Loading camera driver (may ask for your Ubuntu password)..."
@@ -91,13 +69,13 @@ camera_on() {
         module_loaded v4l2loopback && sudo rmmod v4l2loopback
         sudo modprobe v4l2loopback "${CAM_OPTS[@]}" || { camera_diagnostics; return 1; }
     fi
-    for _ in 1 2 3 4 5; do node="$(cam_node)" && break; sleep 1; done
-    if [ -z "${node}" ]; then
+    for _ in 1 2 3 4 5; do cam_registered && break; sleep 1; done
+    if ! cam_registered; then
         echo "The driver loaded but the camera did not appear."
         camera_diagnostics
         return 1
     fi
-    echo "Camera device ready (${node})."
+    echo "Camera driver is loaded."
 }
 
 case "$1" in
@@ -119,7 +97,12 @@ case "$1" in
         echo "Building and starting (first build downloads ~2 GB, be patient)..."
         compose up -d --build
         if [ -z "${cam_msg}" ] && ! docker exec cloudphone test -e /dev/video0; then
-            cam_msg="the phone container did not get the camera device"
+            # The camera was loaded after the phone started: restart it to pick it up.
+            echo "Restarting the phone to connect the camera..."
+            docker restart cloudphone > /dev/null
+            sleep 3
+            docker exec cloudphone test -e /dev/video0 \
+                || cam_msg="the phone container could not see the camera (see ./phone.sh logs)"
         fi
         echo
         echo "=================================================================="
@@ -177,18 +160,18 @@ case "$1" in
             modinfo v4l2loopback > /dev/null 2>&1 && ok "camera driver installed" \
                 || bad "camera driver not installed" "./setup-camera.sh"
         fi
-        if cam_node > /dev/null 2>&1; then
-            ok "camera device $(cam_node) exists"
+        if cam_registered; then
+            ok "camera driver is loaded (CloudPhoneCam)"
         else
             echo "  ...    loading the camera driver:"
             camera_on 2>&1 | sed 's/^/         /' || true
-            cam_node > /dev/null 2>&1 && ok "camera device $(cam_node) exists" \
-                || bad "camera device missing (see the diagnostics above)" "send this output to get it fixed"
+            cam_registered && ok "camera driver is loaded (CloudPhoneCam)" \
+                || bad "camera driver did not load (see the diagnostics above)" "send this output to get it fixed"
         fi
         docker ps --format '{{.Names}}' | grep -qx cloudphone && ok "phone container is running" \
             || bad "phone container not running" "./phone.sh start"
         docker exec cloudphone test -e /dev/video0 && ok "phone container has the camera" \
-            || bad "phone container was started without the camera" "./phone.sh start  (recreates it with the camera)"
+            || bad "phone container has no camera device" "./phone.sh start  (if it still fails, send ./phone.sh logs | grep -i camera)"
         docker exec cloudphone test -e /tmp/camera-ready && ok "camera feed is running" \
             || bad "camera feed not running: $(compose logs --tail=300 2>/dev/null | grep 'camera feed stopped' | tail -1)" \
                    "send this output to get it fixed"

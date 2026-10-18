@@ -1,5 +1,0 @@
-# Added automatically by phone.sh when the virtual camera exists (phone.sh sets CAM_HOST_DEV).
-services:
-  phone:
-    devices:
-      - ${CAM_HOST_DEV:-/dev/video42}:/dev/video0

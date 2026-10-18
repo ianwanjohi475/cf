@@ -1,7 +1,7 @@
 #!/bin/bash
 # Gives the cloud phone a live camera.
 #
-# Creates a virtual webcam named CloudPhoneCam (normally /dev/video42). The phone uses it as its camera, and
+# Loads a virtual webcam named CloudPhoneCam into the kernel. The phone uses it as its camera, and
 # the picture comes from the webcam of whatever device you open the phone page on.
 #
 # Native Ubuntu: installs the v4l2loopback driver from apt.
