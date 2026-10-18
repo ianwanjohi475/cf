@@ -29,10 +29,12 @@
   <button id="pickMedia">Upload photo / video</button>
   <button id="pickAny" class="secondary">Upload file</button>
   <button id="cameraBtn" class="secondary" title="Use this device's webcam as the phone's camera">Camera: off</button>
+  <button id="camFileBtn" class="secondary" title="Use a photo or video from your PC as the phone's camera">Use as camera</button>
   <video id="preview" muted playsinline></video>
   <button id="pasteBtn" class="secondary" title="Type or paste text to send into the phone">Paste text</button>
   <input id="mediaInput" type="file" accept="image/*,video/*" multiple hidden>
   <input id="anyInput" type="file" multiple hidden>
+  <input id="camFileInput" type="file" accept="image/*,video/*" hidden>
   <progress id="progress" max="100" value="0"></progress>
   <span id="status">Ctrl+V pastes your PC clipboard into the phone. Drop files on this bar to upload.</span>
 </header>
@@ -86,8 +88,6 @@
   }
 
   // ---------------------------------------------------------- clipboard
-  // PC -> phone: Ctrl+V inside the phone screen sends your PC clipboard and pastes it.
-  // Phone -> PC: text copied on the phone is put on your PC clipboard.
   const screenFrame = document.getElementById('screen');
   let lastPhoneClip = null;
   let lastSentClip = null;
@@ -149,9 +149,7 @@
   }
   pollPhoneClipboard();
 
-  // ------------------------------------------------------------- camera
-  // Streams this device's webcam into the phone; apps (Meet, WhatsApp...) see it
-  // as the phone's camera.
+  // ------------------------------------------------------------- camera (webcam)
   const cameraBtn = document.getElementById('cameraBtn');
   const preview = document.getElementById('preview');
   const canvas = document.createElement('canvas');
@@ -178,7 +176,6 @@
     const ctx = canvas.getContext('2d');
     const timer = setInterval(() => {
       if (ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 500000 || !preview.videoWidth) return;
-      // Crop the webcam picture to 4:3 (centre) so it isn't stretched.
       const vw = preview.videoWidth, vh = preview.videoHeight;
       const sw = Math.min(vw, vh * 4 / 3), sh = sw * 3 / 4;
       ctx.drawImage(preview, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, 640, 480);
@@ -188,7 +185,7 @@
     cam = {stream, ws, timer};
     cameraBtn.textContent = 'Camera: ON';
     cameraBtn.classList.add('on');
-    setStatus('Live camera is on. Apps in the phone now see your webcam.', 'ok');
+    setStatus('Live webcam is on. All apps in the phone see your webcam.', 'ok');
   }
 
   function cameraOff(message) {
@@ -206,7 +203,6 @@
 
   cameraBtn.onclick = async () => {
     if (cam) return cameraOff();
-    // Check the phone side first, and say exactly what's wrong if it isn't ready.
     try {
       const st = await (await fetch('status')).json();
       if (!st.camera) return setStatus(st.problem, 'err');
@@ -214,6 +210,71 @@
     cameraOn();
   };
 
+  // ------------------------------------------------------------- camera (file mode)
+  // Pick a photo or video from your PC; it loops as the phone's camera feed.
+  // Any app (WhatsApp, Meet, Camera) that opens the camera sees it.
+  const camFileBtn = document.getElementById('camFileBtn');
+  const camFileInput = document.getElementById('camFileInput');
+
+  camFileBtn.onclick = async () => {
+    // If already in file mode, clicking again clears it.
+    if (camFileBtn.classList.contains('on')) {
+      camFileBtn.disabled = true;
+      try {
+        await fetch('camera-source', {method: 'DELETE'});
+      } catch (e) {}
+      camFileBtn.textContent = 'Use as camera';
+      camFileBtn.classList.remove('on');
+      camFileBtn.disabled = false;
+      setStatus('Camera source cleared. Phone is back to placeholder / webcam.');
+      return;
+    }
+    // Check camera device is ready before picking a file.
+    try {
+      const st = await (await fetch('status')).json();
+      if (!st.camera) return setStatus(st.problem, 'err');
+    } catch (e) {}
+    camFileInput.click();
+  };
+
+  camFileInput.onchange = async () => {
+    const file = camFileInput.files[0];
+    camFileInput.value = '';
+    if (!file) return;
+
+    // Turn off live webcam if it's running; both modes write to the same device.
+    if (cam) cameraOff();
+
+    setStatus(`Uploading "${file.name}" as camera source…`);
+    camFileBtn.disabled = true;
+
+    const form = new FormData();
+    form.append('file', file, file.name);
+    try {
+      const r = await fetch('camera-source', {method: 'POST', body: form});
+      const res = await r.json();
+      if (!r.ok) {
+        setStatus(res.error || `Upload failed (${r.status}).`, 'err');
+        camFileBtn.disabled = false;
+        return;
+      }
+      const label = res.kind === 'video' ? `Camera: ${file.name.slice(0, 20)}` : `Camera: ${file.name.slice(0, 20)}`;
+      camFileBtn.textContent = label + ' ✕';
+      camFileBtn.classList.add('on');
+      camFileBtn.disabled = false;
+      setStatus(
+        res.kind === 'video'
+          ? `Video "${file.name}" is now the camera. All phone apps see it looping. Click the button again to stop.`
+          : `Photo "${file.name}" is now the camera. All phone apps see it. Click the button again to stop.`,
+        'ok'
+      );
+    } catch (e) {
+      setStatus('Upload failed: ' + e.message, 'err');
+      camFileBtn.disabled = false;
+    }
+  };
+
+  // ---------------------------------------------------------- drag-and-drop uploads
   const bar = document.getElementById('bar');
   bar.addEventListener('dragover', e => { e.preventDefault(); bar.classList.add('drag'); });
   bar.addEventListener('dragleave', () => bar.classList.remove('drag'));

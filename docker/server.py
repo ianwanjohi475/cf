@@ -125,8 +125,6 @@ async def upload(request):
 
 
 # ---------------------------------------------------------------- clipboard
-# The emulator syncs the X clipboard with Android's clipboard, so we only need
-# to read and write the X clipboard here.
 
 async def clipboard_get(request):
     try:
@@ -142,7 +140,6 @@ async def clipboard_get(request):
 async def clipboard_set(request):
     data = await request.json()
     text = str(data.get("text", ""))
-    # xclip stays in the background to serve the clipboard, so don't wait on its output.
     proc = await asyncio.create_subprocess_exec(
         "xclip", "-selection", "clipboard", "-i",
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
@@ -150,23 +147,28 @@ async def clipboard_set(request):
     proc.stdin.close()
     await proc.wait()
     if data.get("paste"):
-        await asyncio.sleep(0.4)  # let the emulator copy it into Android first
+        await asyncio.sleep(0.4)
         await run("adb", "shell", "input", "keyevent", "KEYCODE_PASTE")
     return web.json_response({"ok": True})
 
 
 # ------------------------------------------------------------------- camera
-# The phone's camera is a virtual webcam (v4l2loopback). We keep it fed with
-# frames all the time: live frames from the browser's webcam while it's on,
-# otherwise a plain "camera off" frame.
+# The phone's camera is a virtual webcam (v4l2loopback). Three modes:
+#   pipe  – frames come from the browser's webcam over WebSocket (or grey when off)
+#   file  – an uploaded photo/video loops as the camera feed
+#
+# Switching modes sets _restart=True, which makes the running ffmpeg exit.
+# feed_forever() then re-enters with the new mode.
 
 class Camera:
     def __init__(self):
         self.available = os.path.exists(CAMERA_DEV)
-        self.latest = None        # last JPEG frame from a browser
+        self.latest = None        # last JPEG from browser webcam
         self.latest_at = 0.0
         self.placeholder = None
-        self.error = ""           # last camera feed error, shown on the page
+        self.error = ""
+        self._source = None       # (path, ext) when in file mode, else None
+        self._restart = False
 
     async def start(self, app):
         if self.available:
@@ -180,36 +182,108 @@ class Camera:
         with open(path, "rb") as f:
             self.placeholder = f.read()
 
+    async def set_source(self, path, ext):
+        """Switch to file mode with the given photo/video."""
+        old = self._source
+        self._source = (path, ext)
+        self._restart = True
+        if old and old[0] != path:
+            try:
+                os.unlink(old[0])
+            except OSError:
+                pass
+
+    def clear_source(self):
+        """Return to webcam/placeholder mode."""
+        old = self._source
+        self._source = None
+        self._restart = True
+        if old:
+            try:
+                os.unlink(old[0])
+            except OSError:
+                pass
+
     async def feed_forever(self):
         await self.make_placeholder()
-        w, h = CAMERA_SIZE
         while True:
-            proc = await asyncio.create_subprocess_exec(
-                # No probing/buffering: frames must reach the phone immediately.
-                "ffmpeg", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0",
-                "-fflags", "nobuffer", "-flags", "low_delay", "-f", "image2pipe", "-c:v", "mjpeg",
-                "-framerate", str(CAMERA_FPS), "-i", "pipe:0",
-                "-vf", f"scale={w}:{h}", "-pix_fmt", "yuyv422", "-f", "v4l2", CAMERA_DEV,
-                stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            sent = 0
-            next_at = time.monotonic()
-            try:
-                while proc.returncode is None:
-                    live = self.latest and time.monotonic() - self.latest_at < 2
-                    proc.stdin.write(self.latest if live else self.placeholder)
-                    await proc.stdin.drain()
-                    sent += 1
-                    if sent == CAMERA_FPS:
-                        open(CAMERA_READY, "w").close()  # the emulator waits for this
-                    next_at += 1 / CAMERA_FPS
-                    await asyncio.sleep(max(0, next_at - time.monotonic()))
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            err = (await proc.stderr.read()).decode(errors="replace").strip()
-            await proc.wait()
+            self._restart = False
+            if self._source:
+                await self._feed_file()
+            else:
+                await self._feed_pipe()
+            await asyncio.sleep(1)
+
+    async def _feed_pipe(self):
+        """Push browser webcam frames (or placeholder) into v4l2loopback."""
+        w, h = CAMERA_SIZE
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-loglevel", "error", "-probesize", "32", "-analyzeduration", "0",
+            "-fflags", "nobuffer", "-flags", "low_delay", "-f", "image2pipe", "-c:v", "mjpeg",
+            "-framerate", str(CAMERA_FPS), "-i", "pipe:0",
+            "-vf", f"scale={w}:{h}", "-pix_fmt", "yuyv422", "-f", "v4l2", CAMERA_DEV,
+            stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        sent = 0
+        next_at = time.monotonic()
+        try:
+            while proc.returncode is None and not self._restart:
+                live = self.latest and time.monotonic() - self.latest_at < 2
+                proc.stdin.write(self.latest if live else self.placeholder)
+                await proc.stdin.drain()
+                sent += 1
+                if sent == CAMERA_FPS:
+                    open(CAMERA_READY, "w").close()
+                next_at += 1 / CAMERA_FPS
+                await asyncio.sleep(max(0, next_at - time.monotonic()))
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        if proc.returncode is None:
+            proc.kill()
+        err = (await proc.stderr.read()).decode(errors="replace").strip()
+        await proc.wait()
+        if not self._restart:
             self.error = err[-300:] or f"ffmpeg exited with code {proc.returncode}"
             print(f"camera feed stopped ({self.error}), restarting", flush=True)
-            await asyncio.sleep(1)
+
+    async def _feed_file(self):
+        """Loop an uploaded photo or video into v4l2loopback."""
+        if not self._source:
+            return
+        path, ext = self._source
+        if not os.path.exists(path):
+            self._source = None
+            return
+        w, h = CAMERA_SIZE
+        is_video = ext in VIDEO_EXT
+        if is_video:
+            cmd = [
+                "ffmpeg", "-loglevel", "error",
+                "-stream_loop", "-1", "-re",
+                "-i", path,
+                "-vf", f"scale={w}:{h}",
+                "-r", str(CAMERA_FPS), "-pix_fmt", "yuyv422", "-f", "v4l2", CAMERA_DEV,
+            ]
+        else:
+            cmd = [
+                "ffmpeg", "-loglevel", "error",
+                "-loop", "1", "-framerate", str(CAMERA_FPS),
+                "-i", path,
+                "-vf", f"scale={w}:{h}",
+                "-r", str(CAMERA_FPS), "-pix_fmt", "yuyv422", "-f", "v4l2", CAMERA_DEV,
+            ]
+        proc = await asyncio.create_subprocess_exec(*cmd, stderr=asyncio.subprocess.PIPE)
+        # Mark camera ready after ffmpeg has had a moment to start.
+        await asyncio.sleep(1.5)
+        open(CAMERA_READY, "w").close()
+        while not self._restart and proc.returncode is None:
+            await asyncio.sleep(0.3)
+        if proc.returncode is None:
+            proc.kill()
+        err = (await proc.stderr.read()).decode(errors="replace").strip()
+        await proc.wait()
+        if not self._restart:
+            self.error = err[-300:] or f"file feed exited with code {proc.returncode}"
+            print(f"file feed stopped ({self.error}), restarting", flush=True)
 
     async def websocket(self, request):
         """Receives JPEG frames from the browser's webcam."""
@@ -223,6 +297,35 @@ class Camera:
         return ws
 
 
+async def camera_source(request):
+    """POST: upload a photo or video to use as the camera.
+       DELETE: go back to webcam / placeholder mode."""
+    cam = request.app["camera"]
+    if not cam.available:
+        return web.json_response({"error": "No camera device on this phone."}, status=503)
+
+    if request.method == "DELETE":
+        cam.clear_source()
+        return web.json_response({"ok": True})
+
+    reader = await request.multipart()
+    async for part in reader:
+        if part.name != "file" or not part.filename:
+            continue
+        ext = os.path.splitext(part.filename.lower())[1]
+        if ext not in IMAGE_EXT and ext not in VIDEO_EXT:
+            return web.json_response({"error": f"Unsupported file type: {ext}"}, status=400)
+        path = f"/tmp/camera-source{ext}"
+        with open(path, "wb") as f:
+            while chunk := await part.read_chunk(1 << 20):
+                f.write(chunk)
+        is_video = ext in VIDEO_EXT
+        await cam.set_source(path, ext)
+        return web.json_response({"ok": True, "kind": "video" if is_video else "photo"})
+
+    return web.json_response({"error": "No file received."}, status=400)
+
+
 async def status(request):
     cam = request.app["camera"]
     if not cam.available:
@@ -232,7 +335,12 @@ async def status(request):
         problem = "The camera feed is not running: " + (cam.error or "still starting, wait a few seconds.")
     else:
         problem = ""
-    return web.json_response({"camera": cam.available and not problem, "problem": problem})
+    source_kind = None
+    if cam._source:
+        _, ext = cam._source
+        source_kind = "video" if ext in VIDEO_EXT else "photo"
+    return web.json_response({"camera": cam.available and not problem, "problem": problem,
+                               "source_kind": source_kind})
 
 
 def main():
@@ -245,6 +353,8 @@ def main():
     app.router.add_get("/clipboard", clipboard_get)
     app.router.add_post("/clipboard", clipboard_set)
     app.router.add_get("/camera", camera.websocket)
+    app.router.add_post("/camera-source", camera_source)
+    app.router.add_delete("/camera-source", camera_source)
     app.router.add_get("/websockify", vnc_proxy)
     app.router.add_post("/upload", upload)
     app.router.add_static("/novnc/", NOVNC_DIR)
