@@ -204,14 +204,15 @@
     setStatus(message || 'Camera off.');
   }
 
-  cameraBtn.onclick = () => cam ? cameraOff() : cameraOn();
-
-  fetch('status').then(r => r.json()).then(s => {
-    if (!s.camera) {
-      cameraBtn.disabled = true;
-      cameraBtn.title = 'Live camera not set up: run ./setup-camera.sh, then ./phone.sh start';
-    }
-  }).catch(() => {});
+  cameraBtn.onclick = async () => {
+    if (cam) return cameraOff();
+    // Check the phone side first, and say exactly what's wrong if it isn't ready.
+    try {
+      const st = await (await fetch('status')).json();
+      if (!st.camera) return setStatus(st.problem, 'err');
+    } catch (e) {}
+    cameraOn();
+  };
 
   const bar = document.getElementById('bar');
   bar.addEventListener('dragover', e => { e.preventDefault(); bar.classList.add('drag'); });

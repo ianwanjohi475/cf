@@ -166,6 +166,7 @@ class Camera:
         self.latest = None        # last JPEG frame from a browser
         self.latest_at = 0.0
         self.placeholder = None
+        self.error = ""           # last camera feed error, shown on the page
 
     async def start(self, app):
         if self.available:
@@ -189,7 +190,7 @@ class Camera:
                 "-fflags", "nobuffer", "-flags", "low_delay", "-f", "image2pipe", "-c:v", "mjpeg",
                 "-framerate", str(CAMERA_FPS), "-i", "pipe:0",
                 "-vf", f"scale={w}:{h}", "-pix_fmt", "yuyv422", "-f", "v4l2", CAMERA_DEV,
-                stdin=asyncio.subprocess.PIPE)
+                stdin=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             sent = 0
             next_at = time.monotonic()
             try:
@@ -204,8 +205,10 @@ class Camera:
                     await asyncio.sleep(max(0, next_at - time.monotonic()))
             except (BrokenPipeError, ConnectionResetError):
                 pass
+            err = (await proc.stderr.read()).decode(errors="replace").strip()
             await proc.wait()
-            print("camera feed stopped, restarting", flush=True)
+            self.error = err[-300:] or f"ffmpeg exited with code {proc.returncode}"
+            print(f"camera feed stopped ({self.error}), restarting", flush=True)
             await asyncio.sleep(1)
 
     async def websocket(self, request):
@@ -221,7 +224,15 @@ class Camera:
 
 
 async def status(request):
-    return web.json_response({"camera": request.app["camera"].available})
+    cam = request.app["camera"]
+    if not cam.available:
+        problem = ("The phone has no camera device. On the PC run ./phone.sh doctor to see which "
+                   "step is missing (usually: ./setup-camera.sh, then ./phone.sh start).")
+    elif not os.path.exists(CAMERA_READY):
+        problem = "The camera feed is not running: " + (cam.error or "still starting, wait a few seconds.")
+    else:
+        problem = ""
+    return web.json_response({"camera": cam.available and not problem, "problem": problem})
 
 
 def main():

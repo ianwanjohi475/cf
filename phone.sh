@@ -91,6 +91,40 @@ case "$1" in
         curl -fsS ${VNC_PASSWORD:+-u "phone:${VNC_PASSWORD}"} -F "file=@$2" "http://localhost:${PORT}/upload"
         echo
         ;;
+    doctor)
+        # Check every step the live camera needs, and say how to fix the first failure.
+        ok()   { echo "  [OK]   $1"; }
+        bad()  { echo "  [FAIL] $1"; echo "         Fix: $2"; exit 1; }
+        echo "Camera check:"
+        if grep -qi microsoft /proc/version; then ok "Ubuntu on WSL, kernel $(uname -r)"; else ok "Ubuntu, kernel $(uname -r)"; fi
+        if grep -qi microsoft /proc/version; then
+            [ -f "${CAM_KO}" ] && ok "camera driver built for this kernel" \
+                || bad "camera driver not built for kernel $(uname -r)" "./setup-camera.sh  (if it already ran, send its output)"
+        else
+            modinfo v4l2loopback > /dev/null 2>&1 && ok "camera driver installed" \
+                || bad "camera driver not installed" "./setup-camera.sh"
+        fi
+        if [ ! -e /dev/video42 ]; then
+            echo "  ...    loading the camera driver:"
+            camera_on 2>&1 | sed 's/^/         /' || true
+        fi
+        [ -e /dev/video42 ] && ok "camera device /dev/video42 exists" \
+            || bad "camera device /dev/video42 missing (driver failed to load, see the error above)" \
+                   "send this output to get it fixed"
+        docker ps --format '{{.Names}}' | grep -qx cloudphone && ok "phone container is running" \
+            || bad "phone container not running" "./phone.sh start"
+        docker exec cloudphone test -e /dev/video0 && ok "phone container has the camera" \
+            || bad "phone container was started without the camera" "./phone.sh start  (recreates it with the camera)"
+        docker exec cloudphone test -e /tmp/camera-ready && ok "camera feed is running" \
+            || bad "camera feed not running: $(compose logs --tail=300 2>/dev/null | grep 'camera feed stopped' | tail -1)" \
+                   "send this output to get it fixed"
+        if compose logs --tail=2000 2>/dev/null | grep -q "Live camera enabled"; then
+            ok "phone started with the live camera"
+        else
+            bad "the phone was started before the camera was ready" "./phone.sh restart"
+        fi
+        echo "All good: open the page, click 'Camera: off' so it turns red, and allow the webcam."
+        ;;
     crashlog)
         # Recent app crashes (Java and native), newest last.
         adb_in logcat -d -b crash -v time | tail -n "${2:-80}"
@@ -112,7 +146,7 @@ case "$1" in
         echo "Phone erased. Run ./phone.sh start to create a fresh one."
         ;;
     *)
-        echo "Usage: ./phone.sh {start|stop|restart|status|logs|install <apk>|upload <file>|crashlog|home|back|rotate|shell|reset}"
+        echo "Usage: ./phone.sh {start|stop|restart|status|logs|install <apk>|upload <file>|crashlog|doctor|home|back|rotate|shell|reset}"
         exit 1
         ;;
 esac

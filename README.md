@@ -66,6 +66,8 @@ When it's off, apps see a dark grey picture.
 
 The browser only allows webcams on `http://localhost` or an `https://` address.
 
+If the camera doesn't work, run `./phone.sh doctor`. It checks each step and tells you the fix.
+
 ## Copy and paste
 
 - **PC to phone:** copy on your PC, tap a text box in the phone, press **Ctrl+V**.
@@ -86,6 +88,7 @@ The browser only allows webcams on `http://localhost` or an `https://` address.
 | `./phone.sh upload photo.jpg` | Send a photo/video/file to the phone |
 | `./phone.sh home` / `back` / `rotate` | Press buttons |
 | `./phone.sh camera-on` | Re-enable the camera device (after a PC/WSL restart) |
+| `./phone.sh doctor` | Check the live camera setup step by step |
 | `./phone.sh crashlog` | Show why an app crashed |
 | `./phone.sh shell` | Open an adb shell |
 | `./phone.sh reset` | **Erase everything** and start fresh |
