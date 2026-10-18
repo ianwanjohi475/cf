@@ -88,10 +88,15 @@ case "$1" in
         [ -e /dev/kvm ] || { echo "/dev/kvm missing - run ./setup.sh first."; exit 1; }
         echo "== Live camera"
         cam_msg=""
+        cam_out=""
         if ! camera_driver_installed; then
             cam_msg="no camera driver for kernel $(uname -r) - run ./setup-camera.sh"
-        elif ! camera_on; then
-            cam_msg="the camera driver failed to load (error above)"
+        else
+            sudo -v || true   # ask for the password now, not in the middle of the output
+            if ! cam_out="$(camera_on 2>&1)"; then
+                cam_msg="the camera driver failed to load (details below)"
+            fi
+            echo "${cam_out}"
         fi
         echo "== Phone"
         echo "Building and starting (first build downloads ~2 GB, be patient)..."
@@ -110,7 +115,11 @@ case "$1" in
             echo " LIVE CAMERA: ON  (click 'Camera: off' on the page to send your webcam)"
         else
             echo " LIVE CAMERA: OFF - ${cam_msg}"
-            echo " Send this whole output (and ./phone.sh doctor) to get it fixed."
+            if [ -n "${cam_out}" ]; then
+                echo "${cam_out}" | sed 's/^/   /'
+                { date; uname -r; echo "${cam_out}"; } > camera-log.txt
+                echo " (saved in camera-log.txt) Send everything in this box to get it fixed."
+            fi
         fi
         echo " Booting Android (1-3 minutes). Open: http://localhost:${PORT}"
         echo "=================================================================="
