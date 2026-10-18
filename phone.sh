@@ -8,9 +8,8 @@ set -a; . ./.env; set +a
 PORT="${WEB_PORT:-6080}"
 
 CAM_OPTS=(devices=1 video_nr=42 card_label=CloudPhoneCam exclusive_caps=1)
-# Camera drivers for WSL: ready-made ones shipped in this repo for known WSL
-# kernels, or ones built on this PC by setup-camera.sh.
-CAM_PREBUILT="camera-drivers/$(uname -r)"
+# Camera driver built on this PC by setup-camera.sh (only needed when the
+# system has no v4l2loopback of its own).
 CAM_BUILT="${HOME}/.local/share/cloudphone/$(uname -r)"
 V4L_SYS="${V4L_SYS:-/sys/class/video4linux}"
 
@@ -22,21 +21,28 @@ is_wsl() { grep -qi microsoft /proc/version; }
 
 cam_driver_dir() {
     local d
-    for d in "${CAM_PREBUILT}" "${CAM_BUILT}"; do
-        [ -f "${d}/v4l2loopback.ko" ] && { echo "${d}"; return 0; }
-    done
-    return 1
+    [ -f "${CAM_BUILT}/v4l2loopback.ko" ] && echo "${CAM_BUILT}"
 }
 
+# The system's own v4l2loopback (recent WSL kernels ship it), or one built by
+# setup-camera.sh.
 camera_driver_installed() {
-    if is_wsl; then cam_driver_dir > /dev/null; else modinfo v4l2loopback > /dev/null 2>&1; fi
+    modinfo v4l2loopback > /dev/null 2>&1 || { is_wsl && cam_driver_dir > /dev/null; }
 }
 
 module_loaded() { grep -q "^$1 " /proc/modules 2> /dev/null; }
 
-# True when the kernel has our virtual camera (found by its name). The phone
-# container creates its own device file for it, so no /dev node is needed here.
-cam_registered() { grep -qx CloudPhoneCam "${V4L_SYS}"/video*/name 2> /dev/null; }
+# True when the kernel has a v4l2loopback virtual camera: ours (CloudPhoneCam),
+# or one the system created itself. The phone container makes its own device
+# file for it, so no /dev node is needed here.
+cam_registered() {
+    local d
+    for d in "${V4L_SYS}"/video*; do
+        [ -e "${d}/max_openers" ] && return 0
+        case "$(cat "${d}/name" 2> /dev/null)" in CloudPhoneCam | "Dummy video device"*) return 0 ;; esac
+    done
+    return 1
+}
 
 camera_diagnostics() {
     echo "---- camera diagnostics ----"
@@ -51,23 +57,26 @@ camera_diagnostics() {
 camera_on() {
     local d
     if cam_registered; then
-        echo "Camera driver is loaded."
+        echo "Virtual camera is ready."
         return 0
     fi
     echo "Loading camera driver (may ask for your Ubuntu password)..."
-    if is_wsl; then
-        d="$(cam_driver_dir)" || { echo "No camera driver for kernel $(uname -r) yet - run ./setup-camera.sh"; return 1; }
-        if ! module_loaded videodev && ! sudo modprobe videodev 2> /dev/null; then
-            module_loaded led_class || sudo insmod "${d}/led-class.ko" 2> /dev/null || true
-            module_loaded mc || sudo insmod "${d}/mc.ko" 2> /dev/null || true
-            sudo insmod "${d}/videodev.ko" || { camera_diagnostics; return 1; }
+    # Loaded but without a camera device: load it again with our settings.
+    module_loaded v4l2loopback && { sudo rmmod v4l2loopback 2> /dev/null || true; }
+    # Prefer the system's own driver: it always matches the running kernel.
+    if ! sudo modprobe v4l2loopback "${CAM_OPTS[@]}" 2> /dev/null; then
+        if is_wsl && d="$(cam_driver_dir)"; then
+            if ! module_loaded videodev && ! sudo modprobe videodev 2> /dev/null; then
+                module_loaded led_class || sudo insmod "${d}/led-class.ko" 2> /dev/null || true
+                module_loaded mc || sudo insmod "${d}/mc.ko" 2> /dev/null || true
+                sudo insmod "${d}/videodev.ko" || { camera_diagnostics; return 1; }
+            fi
+            sudo insmod "${d}/v4l2loopback.ko" "${CAM_OPTS[@]}" || { camera_diagnostics; return 1; }
+        else
+            echo "No usable camera driver for kernel $(uname -r) - run ./setup-camera.sh"
+            camera_diagnostics
+            return 1
         fi
-        # A copy loaded earlier without our camera (other settings): reload it.
-        module_loaded v4l2loopback && sudo rmmod v4l2loopback
-        sudo insmod "${d}/v4l2loopback.ko" "${CAM_OPTS[@]}" || { camera_diagnostics; return 1; }
-    else
-        module_loaded v4l2loopback && sudo rmmod v4l2loopback
-        sudo modprobe v4l2loopback "${CAM_OPTS[@]}" || { camera_diagnostics; return 1; }
     fi
     for _ in 1 2 3 4 5; do cam_registered && break; sleep 1; done
     if ! cam_registered; then
@@ -75,7 +84,7 @@ camera_on() {
         camera_diagnostics
         return 1
     fi
-    echo "Camera driver is loaded."
+    echo "Virtual camera is ready."
 }
 
 case "$1" in
@@ -162,19 +171,14 @@ case "$1" in
         bad()  { echo "  [FAIL] $1"; echo "         Fix: $2"; exit 1; }
         echo "Camera check:"
         if grep -qi microsoft /proc/version; then ok "Ubuntu on WSL, kernel $(uname -r)"; else ok "Ubuntu, kernel $(uname -r)"; fi
-        if is_wsl; then
-            cam_driver_dir > /dev/null && ok "camera driver for this kernel: $(cam_driver_dir)" \
-                || bad "no camera driver for kernel $(uname -r)" "git pull, or ./setup-camera.sh  (if it already ran, send its output)"
-        else
-            modinfo v4l2loopback > /dev/null 2>&1 && ok "camera driver installed" \
-                || bad "camera driver not installed" "./setup-camera.sh"
-        fi
+        camera_driver_installed && ok "camera driver available" \
+            || bad "no camera driver for kernel $(uname -r)" "./setup-camera.sh"
         if cam_registered; then
-            ok "camera driver is loaded (CloudPhoneCam)"
+            ok "virtual camera is loaded"
         else
             echo "  ...    loading the camera driver:"
             camera_on 2>&1 | sed 's/^/         /' || true
-            cam_registered && ok "camera driver is loaded (CloudPhoneCam)" \
+            cam_registered && ok "virtual camera is loaded" \
                 || bad "camera driver did not load (see the diagnostics above)" "send this output to get it fixed"
         fi
         docker ps --format '{{.Names}}' | grep -qx cloudphone && ok "phone container is running" \

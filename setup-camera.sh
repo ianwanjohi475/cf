@@ -14,9 +14,14 @@ MOD_OPTS=(devices=1 video_nr=42 card_label=CloudPhoneCam exclusive_caps=1)
 DATA_DIR="${HOME}/.local/share/cloudphone"
 WSL_DIR="${DATA_DIR}/$(uname -r)"
 
-if grep -qx CloudPhoneCam /sys/class/video4linux/*/name 2> /dev/null; then
+if ls /sys/class/video4linux/*/max_openers > /dev/null 2>&1; then
     echo "Camera device is ready. Run: ./phone.sh start"
     exit 0
+fi
+
+if modinfo v4l2loopback > /dev/null 2>&1; then
+    echo "Your system already includes the camera driver - no build needed."
+    exec ./phone.sh camera-on
 fi
 
 if ! grep -qi microsoft /proc/version; then
@@ -31,9 +36,7 @@ if ! grep -qi microsoft /proc/version; then
 fi
 
 # ---- Ubuntu on WSL ----
-if [ -f "camera-drivers/$(uname -r)/v4l2loopback.ko" ]; then
-    echo "A ready-made camera driver for your kernel is included - no build needed."
-elif [ ! -f "${WSL_DIR}/v4l2loopback.ko" ]; then
+if [ ! -f "${WSL_DIR}/v4l2loopback.ko" ]; then
     KREL="$(uname -r)"            # e.g. 6.6.87.2-microsoft-standard-WSL2
     TAG="linux-msft-wsl-${KREL%%-*}"
     BUILD="${HOME}/.cache/cloudphone-kernel"
