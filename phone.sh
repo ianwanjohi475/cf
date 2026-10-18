@@ -70,14 +70,29 @@ case "$1" in
             exit 1
         fi
         [ -e /dev/kvm ] || { echo "/dev/kvm missing - run ./setup.sh first."; exit 1; }
-        if camera_driver_installed; then
-            camera_on || echo "Camera could not be enabled; starting without a live camera."
+        echo "== Live camera"
+        cam_msg=""
+        if ! camera_driver_installed; then
+            cam_msg="no camera driver for kernel $(uname -r) - run ./setup-camera.sh"
+        elif ! camera_on; then
+            cam_msg="the camera driver failed to load (error above)"
         fi
+        echo "== Phone"
         echo "Building and starting (first build downloads ~2 GB, be patient)..."
         compose up -d --build
+        if [ -z "${cam_msg}" ] && ! docker exec cloudphone test -e /dev/video0; then
+            cam_msg="the phone container did not get the camera device"
+        fi
         echo
-        echo "Booting Android (1-3 minutes). Open: http://localhost:${PORT}"
-        echo "Watch progress with: ./phone.sh logs"
+        echo "=================================================================="
+        if [ -z "${cam_msg}" ]; then
+            echo " LIVE CAMERA: ON  (click 'Camera: off' on the page to send your webcam)"
+        else
+            echo " LIVE CAMERA: OFF - ${cam_msg}"
+            echo " Send this whole output (and ./phone.sh doctor) to get it fixed."
+        fi
+        echo " Booting Android (1-3 minutes). Open: http://localhost:${PORT}"
+        echo "=================================================================="
         ;;
     camera-on)
         camera_on
