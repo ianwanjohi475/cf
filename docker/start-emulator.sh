@@ -60,8 +60,26 @@ fit_window() {
     xdotool windowmove "${wid}" 0 0 windowsize "${wid}" "${PHONE_WIDTH}" "${PHONE_HEIGHT}"
 }
 
+# The emulator pops up message boxes (e.g. "running using nested virtualization",
+# always shown under WSL) that wait for OK and freeze the phone screen until
+# then. Press OK on any small dialog window that appears.
+dismiss_dialogs() {
+    local main wid WIDTH HEIGHT
+    main="$(xdotool search --name "Android Emulator - " 2>/dev/null | head -1)"
+    for wid in $(xdotool search --onlyvisible --name '.*' 2>/dev/null); do
+        [ "${wid}" = "${main}" ] && continue
+        eval "$(xdotool getwindowgeometry --shell "${wid}" 2>/dev/null | grep -E '^(WIDTH|HEIGHT)=')"
+        # Bigger than the side toolbar, much smaller than the phone screen.
+        if [ "${WIDTH:-0}" -gt 200 ] && [ "${WIDTH}" -lt 700 ] && [ "${HEIGHT:-0}" -gt 50 ] && [ "${HEIGHT}" -lt 400 ]; then
+            echo "Closing emulator dialog: $(xdotool getwindowname "${wid}" 2>/dev/null)"
+            xdotool windowfocus --sync "${wid}" key Return 2>/dev/null || true
+        fi
+    done
+}
+
 # Fit the window, then apply speed-ups once Android has booted (runs in the background).
 (
+    for _ in $(seq 120); do dismiss_dialogs; sleep 2; done &
     until fit_window; do sleep 1; done
     sleep 3
     fit_window || true

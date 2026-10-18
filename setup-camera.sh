@@ -64,14 +64,16 @@ if [ ! -f "${WSL_KO}" ]; then
         cp arch/x86/configs/config-wsl .config
     fi
     scripts/config --module MEDIA_SUPPORT --enable MEDIA_CAMERA_SUPPORT --module VIDEO_DEV
-    # LOCALVERSION= stops the build adding "+" to the version, which would make
-    # the driver refuse to load.
-    make LOCALVERSION= olddefconfig > /dev/null
-    if [ "$(make -s LOCALVERSION= kernelrelease)" != "${KREL}" ]; then
-        echo "Kernel source version $(make -s LOCALVERSION= kernelrelease) does not match running ${KREL}."
+    # The driver only loads if its version matches the running kernel exactly.
+    # Builds from this source add "+" to the version unless LOCALVERSION= is
+    # given; some WSL kernels have the "+" and some don't, so match whichever runs.
+    if [[ "${KREL}" == *+ ]]; then LV=(); else LV=(LOCALVERSION=); fi
+    make "${LV[@]}" olddefconfig > /dev/null
+    if [ "$(make -s "${LV[@]}" kernelrelease)" != "${KREL}" ]; then
+        echo "Kernel source version $(make -s "${LV[@]}" kernelrelease) does not match running ${KREL}."
         exit 1
     fi
-    make LOCALVERSION= -j"$(nproc)"
+    make "${LV[@]}" -j"$(nproc)"
     make -C "${BUILD}/v4l2loopback" KERNELRELEASE="${KREL}" KERNEL_DIR="${BUILD}/linux"
 
     mkdir -p "${DATA_DIR}"
