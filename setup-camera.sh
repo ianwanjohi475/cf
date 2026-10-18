@@ -12,7 +12,7 @@ cd "$(dirname "$0")"
 
 MOD_OPTS=(devices=1 video_nr=42 card_label=CloudPhoneCam exclusive_caps=1)
 DATA_DIR="${HOME}/.local/share/cloudphone"
-WSL_KO="${DATA_DIR}/v4l2loopback-$(uname -r).ko"
+WSL_DIR="${DATA_DIR}/$(uname -r)"
 
 if [ -e /dev/video42 ]; then
     echo "Camera device is ready (/dev/video42). Run: ./phone.sh start"
@@ -31,7 +31,9 @@ if ! grep -qi microsoft /proc/version; then
 fi
 
 # ---- Ubuntu on WSL ----
-if [ ! -f "${WSL_KO}" ]; then
+if [ -f "camera-drivers/$(uname -r)/v4l2loopback.ko" ]; then
+    echo "A ready-made camera driver for your kernel is included - no build needed."
+elif [ ! -f "${WSL_DIR}/v4l2loopback.ko" ]; then
     KREL="$(uname -r)"            # e.g. 6.6.87.2-microsoft-standard-WSL2
     TAG="linux-msft-wsl-${KREL%%-*}"
     BUILD="${HOME}/.cache/cloudphone-kernel"
@@ -76,12 +78,10 @@ if [ ! -f "${WSL_KO}" ]; then
     make "${LV[@]}" -j"$(nproc)"
     make -C "${BUILD}/v4l2loopback" KERNELRELEASE="${KREL}" KERNEL_DIR="${BUILD}/linux"
 
-    mkdir -p "${DATA_DIR}"
-    cp "${BUILD}/v4l2loopback/v4l2loopback.ko" "${WSL_KO}"
+    mkdir -p "${WSL_DIR}"
+    cp "${BUILD}/v4l2loopback/v4l2loopback.ko" "${WSL_DIR}/"
     # Keep the media modules too, in case this WSL install doesn't ship them.
-    cp drivers/leds/led-class.ko "${DATA_DIR}/led-class-${KREL}.ko" 2>/dev/null || true
-    cp drivers/media/mc/mc.ko "${DATA_DIR}/mc-${KREL}.ko" 2>/dev/null || true
-    cp drivers/media/v4l2-core/videodev.ko "${DATA_DIR}/videodev-${KREL}.ko" 2>/dev/null || true
+    cp drivers/leds/led-class.ko drivers/media/mc/mc.ko drivers/media/v4l2-core/videodev.ko "${WSL_DIR}/"
     cd - > /dev/null
     rm -rf "${BUILD}"
 fi

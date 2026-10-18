@@ -8,8 +8,10 @@ set -a; . ./.env; set +a
 PORT="${WEB_PORT:-6080}"
 
 CAM_OPTS=(devices=1 video_nr=42 card_label=CloudPhoneCam exclusive_caps=1)
-CAM_DIR="${HOME}/.local/share/cloudphone"
-CAM_KO="${CAM_DIR}/v4l2loopback-$(uname -r).ko"
+# Camera drivers for WSL: ready-made ones shipped in this repo for known WSL
+# kernels, or ones built on this PC by setup-camera.sh.
+CAM_PREBUILT="camera-drivers/$(uname -r)"
+CAM_BUILT="${HOME}/.local/share/cloudphone/$(uname -r)"
 
 adb_in() { docker exec cloudphone adb "$@"; }
 
@@ -22,23 +24,41 @@ compose() {
     fi
 }
 
-camera_driver_installed() {
-    [ -f "${CAM_KO}" ] || { ! grep -qi microsoft /proc/version && modinfo v4l2loopback > /dev/null 2>&1; }
+is_wsl() { grep -qi microsoft /proc/version; }
+
+cam_driver_dir() {
+    local d
+    for d in "${CAM_PREBUILT}" "${CAM_BUILT}"; do
+        [ -f "${d}/v4l2loopback.ko" ] && { echo "${d}"; return 0; }
+    done
+    return 1
 }
+
+camera_driver_installed() {
+    if is_wsl; then cam_driver_dir > /dev/null; else modinfo v4l2loopback > /dev/null 2>&1; fi
+}
+
+module_loaded() { grep -q "^$1 " /proc/modules 2> /dev/null; }
 
 camera_on() {
     [ -e /dev/video42 ] && return 0
-    if grep -qi microsoft /proc/version; then
-        [ -f "${CAM_KO}" ] || { echo "No camera driver yet - run ./setup-camera.sh"; return 1; }
-        if ! sudo modprobe videodev 2> /dev/null; then
-            sudo insmod "${CAM_DIR}/led-class-$(uname -r).ko" 2> /dev/null || true
-            sudo insmod "${CAM_DIR}/mc-$(uname -r).ko" 2> /dev/null || true
-            sudo insmod "${CAM_DIR}/videodev-$(uname -r).ko"
+    if is_wsl; then
+        local d
+        d="$(cam_driver_dir)" || { echo "No camera driver for kernel $(uname -r) yet - run ./setup-camera.sh"; return 1; }
+        echo "Loading camera driver (may ask for your Ubuntu password)..."
+        if ! module_loaded videodev && ! sudo modprobe videodev 2> /dev/null; then
+            module_loaded led_class || sudo insmod "${d}/led-class.ko" 2> /dev/null || true
+            module_loaded mc || sudo insmod "${d}/mc.ko" 2> /dev/null || true
+            sudo insmod "${d}/videodev.ko" || { sudo dmesg | tail -n 5; return 1; }
         fi
-        sudo insmod "${CAM_KO}" "${CAM_OPTS[@]}"
+        if ! module_loaded v4l2loopback; then
+            sudo insmod "${d}/v4l2loopback.ko" "${CAM_OPTS[@]}" || { sudo dmesg | tail -n 5; return 1; }
+        fi
     else
         sudo modprobe v4l2loopback "${CAM_OPTS[@]}"
     fi
+    for _ in 1 2 3 4 5; do [ -e /dev/video42 ] && break; sleep 1; done
+    [ -e /dev/video42 ] || { echo "Driver loaded but /dev/video42 did not appear."; return 1; }
     echo "Camera device ready (/dev/video42)."
 }
 
@@ -97,9 +117,9 @@ case "$1" in
         bad()  { echo "  [FAIL] $1"; echo "         Fix: $2"; exit 1; }
         echo "Camera check:"
         if grep -qi microsoft /proc/version; then ok "Ubuntu on WSL, kernel $(uname -r)"; else ok "Ubuntu, kernel $(uname -r)"; fi
-        if grep -qi microsoft /proc/version; then
-            [ -f "${CAM_KO}" ] && ok "camera driver built for this kernel" \
-                || bad "camera driver not built for kernel $(uname -r)" "./setup-camera.sh  (if it already ran, send its output)"
+        if is_wsl; then
+            cam_driver_dir > /dev/null && ok "camera driver for this kernel: $(cam_driver_dir)" \
+                || bad "no camera driver for kernel $(uname -r)" "git pull, or ./setup-camera.sh  (if it already ran, send its output)"
         else
             modinfo v4l2loopback > /dev/null 2>&1 && ok "camera driver installed" \
                 || bad "camera driver not installed" "./setup-camera.sh"

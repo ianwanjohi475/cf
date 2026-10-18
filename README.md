@@ -59,6 +59,10 @@ just like a real phone camera. One-time setup:
 ./phone.sh start
 ```
 
+On WSL, ready-made drivers for some WSL kernels are included in `camera-drivers/`.
+If yours is one of them, `./phone.sh start` loads it by itself and you can skip
+`./setup-camera.sh`. Check your kernel with `uname -r`.
+
 Then click **Camera: off** in the top bar so it turns red (**Camera: ON**) and allow
 the webcam. Your live picture shows as a small preview, and every app in the phone
 (Meet, WhatsApp, Camera...) now sees it as the phone's front and back camera.
